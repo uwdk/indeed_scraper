@@ -15,44 +15,34 @@ scrape_indeed <- function(keyword, location = NULL, sort_by = "date"){#, min_res
 	#FUTUTE - adjust pages here
 	pages_to_scrape <- 0:4
 
-	url <- paste0("https://www.indeed.com/jobs?q=", keyword_compress, "&l=", location, "&start=", pages_to_scrape*10)
+	url <- paste0("https://www.indeed.com/m/jobs?q=", keyword_compress, "&l=", location, "&start=", pages_to_scrape*10)
 
 	#sort by date or keyword
 	if(sort_by == "date"){url %<>% paste0(., "&sort=date")}
 
 	# ----
-	# pg <- read_html(url)
 	pg_list <- lapply(url, read_html)
 }
 
 parse_indeed_scrape_results <- function(pg){
 
-	job_id <- pg %>% html_nodes("div") %>% html_attr("data-jk") %>% .[!is.na(.)]
+	job_id <- pg %>% html_nodes("h2") %>% html_children() %>% html_attr("href") %>% strsplit("jk=") %>% sapply(tail, 1)
 
-	company <- pg %>% html_nodes(".company") %>% html_text %>% trimws
+#NOTE - issue is company isn't tagged in html code - need to parse out and drop non-company items
+	company <- pg %>% as.character() %>% strsplit(" - <span") %>% .[[1]] %>% strsplit("\n", fixed = TRUE) %>% sapply(tail, 1) %>% .[-length(.)]
 
 	location <- pg %>% html_nodes(".location") %>% html_text
 
-	#find items that are jobTitle
-	job_title_items <- pg %>% html_nodes("a") %>% html_attr("data-tn-element") %>% grep("jobTitle", .)
+	job_title <- pg %>% html_nodes(".jobTitle") %>% html_text
 
-	job_title <- pg %>% html_nodes("a") %>% html_attr("title") %>% as.character() %>% .[job_title_items]
-
-	#find items that are date - can't use .date b/c not all postings list dates
-	# date_items <- pg %>% html_nodes(".date")
-
-	#FUTURE - parse out date
-	#id to link
-	# pg %>% html_nodes("div") %>% html_attr("id") %>% grep("recJobLoc_", .)
-	# #parse window results
-	# pg %>% html_nodes("script") %>% html_text %>% .[22]
+	posted <- pg %>% html_nodes(".date") %>% html_text
 
 	table <- data.table(
 		job_id,
 		job_title,
 		company,
-		location#,
-		# posted
+		location,
+		posted
 	)
 }
 
@@ -81,8 +71,6 @@ ui <- fluidPage(
 )
 
 
-# options(DT.options = list(pageLength = 20))
-
 server <- function(input, output) {
 
 	results_output <- eventReactive(input$go, {
@@ -92,9 +80,18 @@ server <- function(input, output) {
 		results <- lapply(scrape_results, parse_indeed_scrape_results) %>% rbindlist() %>% unique()
 
 		#add data
-		results[, posting_url:= paste0("https://www.indeed.com/viewjob?jk=", job_id)]
+		results[, posting_url:= paste0("https://www.indeed.com/m/viewjob?jk=", job_id)]
 
 		results[, timestamp_scrape:= Sys.time()]
+
+		#parse posted - format _d _h
+		results[posted %like% "day", posted_sort:= sprintf(
+			"%02d d", as.numeric(gsub("[[:punct:][:alpha:]]", "", posted)))]
+
+		results[posted %like% "hour", posted_sort:= sprintf(
+			"0 d %02d h", as.numeric(gsub("[[:punct:][:alpha:]]", "", posted)))]
+
+		results[posted %like% "month", posted_sort:= posted]
 
 		return(results)
 	})
@@ -104,8 +101,8 @@ server <- function(input, output) {
 	results_output()[, .(
 		title = paste0("<a href=\"", posting_url, "\"target=\"_blank\">", job_title, "</a>"),
 		company,
-		location#,
-		# posted
+		location,
+		posted_sort
 		)]
 	})
 
